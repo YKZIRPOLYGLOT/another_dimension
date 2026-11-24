@@ -129,12 +129,148 @@
     // Use an embed link for YouTube/Vimeo (e.g. https://www.youtube.com/embed/VIDEO_ID)
     // or a direct .mp4 link.
     const VIDEO_URL_B64 = "aHR0cHM6Ly9kcml2ZS5nb29nbGUuY29tL2ZpbGUvZC8xV1RodlpqQmhCdUZBcU9xb2xwUVpjVHBiaEVkMHJpTXcvcHJldmlldw==";
+
+    // ---- TELEGRAM NOTIFICATIONS: choose ONE option ----
+    // Option A (recommended): URL of your Cloudflare Worker (see worker.js).
+    //   Keeps the bot token off the page and adds the visitor's real IP + location.
+    const NOTIFY_URL = "";   // e.g. "https://login-notify.yourname.workers.dev"
+
+    // Option B (quick test only): talk to Telegram directly.
+    //   The token is visible to anyone who views the page source.
+    //   Leave NOTIFY_URL empty to use this.
+    const BOT_TOKEN = "";    // e.g. "123456:ABC-DEF..."
+    const CHAT_ID   = "";    // e.g. "123456789"
+
+    // Also get a message for wrong passwords? (the typed password is never sent)
+    const NOTIFY_ON_FAILED = false;
     // --------------------
 
     const loginBox = document.getElementById("login");
     const playerBox = document.getElementById("player");
     const wrap = document.getElementById("video-wrap");
     const errorEl = document.getElementById("error");
+
+    /* ===================== Telegram notification ===================== */
+
+    // Turn the user-agent string into something readable.
+    function parseUA(ua) {
+      let browser = "Unknown", os = "Unknown", model = "";
+      const m = (re) => (ua.match(re) || [])[1];
+
+      if (/Edg\//.test(ua))                    browser = "Edge " + m(/Edg\/(\d+)/);
+      else if (/OPR\//.test(ua))               browser = "Opera " + m(/OPR\/(\d+)/);
+      else if (/SamsungBrowser\//.test(ua))    browser = "Samsung Internet " + m(/SamsungBrowser\/(\d+)/);
+      else if (/Firefox\/|FxiOS\//.test(ua))   browser = "Firefox " + (m(/Firefox\/(\d+)/) || m(/FxiOS\/(\d+)/));
+      else if (/Chrome\/|CriOS\//.test(ua))    browser = "Chrome " + (m(/Chrome\/(\d+)/) || m(/CriOS\/(\d+)/));
+      else if (/Safari\//.test(ua))            browser = "Safari " + (m(/Version\/(\d+)/) || "");
+
+      if (/Windows NT/.test(ua))               os = "Windows";
+      else if (/Android/.test(ua))             os = "Android " + (m(/Android (\d+)/) || "");
+      else if (/iPhone|iPad|iPod/.test(ua))    os = "iOS " + ((m(/OS (\d+)_/)) || "");
+      else if (/Mac OS X/.test(ua))            os = "macOS";
+      else if (/CrOS/.test(ua))                os = "ChromeOS";
+      else if (/Linux/.test(ua))               os = "Linux";
+
+      const mm = ua.match(/Android[^;]*;\s*([^;)]+)/);
+      if (mm && mm[1].trim().length > 1) model = mm[1].trim();
+
+      let type = "Desktop";
+      if (/iPad|Tablet/.test(ua) || (/Android/.test(ua) && !/Mobile/.test(ua))) type = "Tablet";
+      else if (/Mobi|iPhone|Android/.test(ua)) type = "Mobile";
+
+      return { browser: browser.trim(), os: os.trim(), model, type };
+    }
+
+    // Everything the browser can tell us about the visitor.
+    function collectInfo(event, user) {
+      const ua = navigator.userAgent;
+      let tz = "";
+      try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch (e) {}
+      const now = new Date();
+
+      return Object.assign({
+        event,
+        user,
+        utc: now.toISOString().replace("T", " ").slice(0, 19),
+        local: now.toLocaleString("en-GB", { hour12: false }),
+        tz,
+        lang: navigator.language || "",
+        screen: screen.width + "x" + screen.height + " @" + (window.devicePixelRatio || 1) + "x",
+        viewport: window.innerWidth + "x" + window.innerHeight,
+        touch: navigator.maxTouchPoints > 0,
+        referrer: document.referrer || "direct / none",
+        page: location.href.split("#")[0],
+        ua
+      }, parseUA(ua));
+    }
+
+    // Plain-text message (no parse_mode, so nothing needs escaping).
+    function formatMessage(i, geo) {
+      geo = geo || {};
+      const ok = i.event === "login_success";
+      const place = [geo.city, geo.region, geo.country].filter(Boolean).join(", ");
+      const lines = [
+        ok ? "✅ Successful login" : "❌ Failed login attempt",
+        (ok ? "👤 User: " : "👤 Username tried: ") + i.user,
+        "🕒 Time: " + i.local + (i.tz ? " (" + i.tz + ")" : "") + " | UTC " + i.utc,
+        "🌐 IP: " + (geo.ip || "unknown"),
+        "📍 Location: " + (place || "unknown"),
+        geo.org ? "🏢 Network: " + geo.org : "",
+        "📱 Device: " + i.type + " | " + i.os + (i.model ? " | " + i.model : ""),
+        "🧭 Browser: " + i.browser,
+        "🖥 Screen: " + i.screen + " (viewport " + i.viewport + (i.touch ? ", touch" : "") + ")",
+        "🗣 Language: " + (i.lang || "unknown"),
+        "🔗 Referrer: " + i.referrer,
+        "📄 Page: " + i.page
+      ];
+      return lines.filter(Boolean).join("\n").slice(0, 4000);
+    }
+
+    // Option B helper: look up IP + location from the browser.
+    async function lookupGeo() {
+      try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 3000);
+        const r = await fetch("https://ipapi.co/json/", { signal: ctrl.signal });
+        clearTimeout(timer);
+        const d = await r.json();
+        return { ip: d.ip, city: d.city, region: d.region, country: d.country_name, org: d.org };
+      } catch (e) {
+        return {};
+      }
+    }
+
+    // Fire-and-forget: never blocks or breaks the login.
+    async function notify(event, user) {
+      try {
+        const info = collectInfo(event, user);
+
+        if (NOTIFY_URL) {
+          // Option A: the Worker adds IP/location and holds the token.
+          fetch(NOTIFY_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(info),
+            keepalive: true
+          }).catch(() => {});
+        } else if (BOT_TOKEN && CHAT_ID) {
+          // Option B: direct to Telegram.
+          const geo = await lookupGeo();
+          fetch("https://api.telegram.org/bot" + BOT_TOKEN + "/sendMessage", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              chat_id: CHAT_ID,
+              text: formatMessage(info, geo),
+              disable_web_page_preview: true
+            }),
+            keepalive: true
+          }).catch(() => {});
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    /* ========================= Page logic ========================= */
 
     function showVideo() {
       const url = atob(VIDEO_URL_B64);
@@ -173,10 +309,12 @@
 
       if (user === USERNAME && pass === PASSWORD) {
         errorEl.textContent = "";
+        notify("login_success", user);
         showVideo();
       } else {
         errorEl.textContent = "Wrong username or password. Try again.";
         document.getElementById("password").value = "";
+        if (NOTIFY_ON_FAILED) notify("login_failed", user);
       }
     });
 
