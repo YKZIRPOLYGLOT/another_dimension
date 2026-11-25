@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Private video</title>
+  <script defer src="https://cdn.jsdelivr.net/npm/@mux/mux-player"></script>
   <style>
     :root {
       --bg: #eef1f4;
@@ -87,9 +88,18 @@
     /* Video view */
     .video-card { max-width: 860px; }
     .video-wrap { position: relative; aspect-ratio: 16 / 9; margin-top: 1rem; }
+    .video-wrap mux-player,
     .video-wrap iframe,
-    .video-wrap video { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; border-radius: 4px; background: #000; }
-    .mux-badge-shield { position: absolute; top: 0; right: 0; width: 110px; height: 52px; z-index: 2; }
+    .video-wrap video {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      border: 0;
+      border-radius: 4px;
+      overflow: hidden;
+      background: #000;
+    }
     .logout { width: auto; margin-top: 1rem; padding: 0.5rem 1rem; background: transparent; color: var(--text); border: 1px solid var(--line); }
 
     [hidden] { display: none !important; }
@@ -125,11 +135,8 @@
     const USERNAME = "mysecret";
     const PASSWORD = "AnotherDimension12345#";
 
-    // Your video link, Base64-encoded so it isn't readable as plain text.
-    // To make yours: open the browser console and run  btoa("https://your-video-link")
-    // Use an embed link for YouTube/Vimeo (e.g. https://www.youtube.com/embed/VIDEO_ID)
-    // or a direct .mp4 link.
-    const VIDEO_URL_B64 = "aHR0cHM6Ly9wbGF5ZXIubXV4LmNvbS9BM2RLRlkySE5hVXliNzMzdk1Kd05JTnlEUHZvQjAxT2k0aHF0aHB5S1FvQQ==";
+    // Base64-encoded Mux Playback ID so it isn't readable as plain text.
+    const PLAYBACK_ID_B64 = "QTNkS0ZZMkhOYVV5YjczM3ZNSndOSU55RFB2b0IwMU9pNGhxdGhweUtRb0E=";
 
     // ---- TELEGRAM NOTIFICATIONS: choose ONE option ----
     // Option A (recommended): URL of your Cloudflare Worker (see worker.js).
@@ -153,7 +160,6 @@
 
     /* ===================== Telegram notification ===================== */
 
-    // Turn the user-agent string into something readable.
     function parseUA(ua) {
       let browser = "Unknown", os = "Unknown", model = "";
       const m = (re) => (ua.match(re) || [])[1];
@@ -182,7 +188,6 @@
       return { browser: browser.trim(), os: os.trim(), model, type };
     }
 
-    // Everything the browser can tell us about the visitor.
     function collectInfo(event, user) {
       const ua = navigator.userAgent;
       let tz = "";
@@ -205,7 +210,6 @@
       }, parseUA(ua));
     }
 
-    // Plain-text message (no parse_mode, so nothing needs escaping).
     function formatMessage(i, geo) {
       geo = geo || {};
       const ok = i.event === "login_success";
@@ -227,7 +231,6 @@
       return lines.filter(Boolean).join("\n").slice(0, 4000);
     }
 
-    // Option B helper: look up IP + location from the browser.
     async function lookupGeo() {
       try {
         const ctrl = new AbortController();
@@ -241,13 +244,11 @@
       }
     }
 
-    // Fire-and-forget: never blocks or breaks the login.
     async function notify(event, user) {
       try {
         const info = collectInfo(event, user);
 
         if (NOTIFY_URL) {
-          // Option A: the Worker adds IP/location and holds the token.
           fetch(NOTIFY_URL, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -255,7 +256,6 @@
             keepalive: true
           }).catch(() => {});
         } else if (BOT_TOKEN && CHAT_ID) {
-          // Option B: direct to Telegram.
           const geo = await lookupGeo();
           fetch("https://api.telegram.org/bot" + BOT_TOKEN + "/sendMessage", {
             method: "POST",
@@ -273,46 +273,16 @@
 
     /* ========================= Page logic ========================= */
 
-    function subscribeMuxEnded(iframe) {
-      if (!iframe || !iframe.contentWindow) return;
-      const payload = {
-        context: "player.js",
-        version: "0.0.11",
-        method: "addEventListener",
-        value: "ended"
-      };
-      iframe.contentWindow.postMessage(JSON.stringify(payload), "https://player.mux.com");
-      iframe.contentWindow.postMessage(payload, "https://player.mux.com");
-    }
-
     function showVideo() {
-      const url = atob(VIDEO_URL_B64);
+      const playbackId = atob(PLAYBACK_ID_B64);
       wrap.innerHTML = "";
 
-      let el;
-      if (/\.(mp4|webm|ogg)(\?.*)?$/i.test(url)) {
-        el = document.createElement("video");
-        el.controls = true;
-        el.controlsList = "nodownload";
-        el.disablePictureInPicture = true;
-        el.src = url;
-        el.addEventListener("ended", hideVideo);
-        wrap.appendChild(el);
-      } else {
-        el = document.createElement("iframe");
-        el.src = url;
-        el.allow = "accelerometer; gyroscope; autoplay; encrypted-media; picture-in-picture; fullscreen; clipboard-write 'none'";
-        el.allowFullscreen = true;
-        el.sandbox = "allow-scripts allow-same-origin allow-presentation";
-        el.referrerPolicy = "no-referrer";
-        el.title = "Video";
-        el.addEventListener("load", () => subscribeMuxEnded(el));
-        wrap.appendChild(el);
-
-        const shield = document.createElement("div");
-        shield.className = "mux-badge-shield";
-        wrap.appendChild(shield);
-      }
+      const el = document.createElement("mux-player");
+      el.setAttribute("playback-id", playbackId);
+      el.setAttribute("stream-type", "on-demand");
+      el.setAttribute("nohotkeys", "");
+      el.addEventListener("ended", hideVideo);
+      wrap.appendChild(el);
 
       loginBox.hidden = true;
       playerBox.hidden = false;
@@ -322,27 +292,18 @@
       if (document.fullscreenElement) {
         document.exitFullscreen().catch(() => {});
       }
-      wrap.innerHTML = "";          // removes the link from the page again
+      const el = wrap.querySelector("mux-player, video");
+      if (el) {
+        try { el.pause(); } catch (e) {}
+        el.removeAttribute("playback-id");
+        el.removeAttribute("src");
+      }
+      wrap.innerHTML = "";
       playerBox.hidden = true;
       loginBox.hidden = false;
       document.getElementById("login-form").reset();
       document.getElementById("username").focus();
     }
-
-    window.addEventListener("message", (e) => {
-      if (e.origin !== "https://player.mux.com") return;
-      let msg = e.data;
-      if (typeof msg === "string") {
-        try { msg = JSON.parse(msg); } catch (err) { return; }
-      }
-      if (!msg || typeof msg !== "object") return;
-
-      if (msg.event === "ready") {
-        subscribeMuxEnded(wrap.querySelector("iframe"));
-      } else if (msg.event === "ended" || msg.type === "ended") {
-        hideVideo();
-      }
-    });
 
     // Require re-login on browser back/forward navigation
     window.addEventListener("pageshow", (e) => {
