@@ -89,6 +89,7 @@
     .video-wrap { position: relative; aspect-ratio: 16 / 9; margin-top: 1rem; }
     .video-wrap iframe,
     .video-wrap video { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; border-radius: 4px; background: #000; }
+    .mux-badge-shield { position: absolute; top: 0; right: 0; width: 110px; height: 52px; z-index: 2; }
     .logout { width: auto; margin-top: 1rem; padding: 0.5rem 1rem; background: transparent; color: var(--text); border: 1px solid var(--line); }
 
     [hidden] { display: none !important; }
@@ -128,7 +129,7 @@
     // To make yours: open the browser console and run  btoa("https://your-video-link")
     // Use an embed link for YouTube/Vimeo (e.g. https://www.youtube.com/embed/VIDEO_ID)
     // or a direct .mp4 link.
-    const VIDEO_URL_B64 = "aHR0cHM6Ly9kcml2ZS5nb29nbGUuY29tL2ZpbGUvZC8xV1RodlpqQmhCdUZBcU9xb2xwUVpjVHBiaEVkMHJpTXcvcHJldmlldw==";
+    const VIDEO_URL_B64 = "aHR0cHM6Ly9wbGF5ZXIubXV4LmNvbS9BM2RLRlkySE5hVXliNzMzdk1Kd05JTnlEUHZvQjAxT2k0aHF0aHB5S1FvQQ==";
 
     // ---- TELEGRAM NOTIFICATIONS: choose ONE option ----
     // Option A (recommended): URL of your Cloudflare Worker (see worker.js).
@@ -272,6 +273,18 @@
 
     /* ========================= Page logic ========================= */
 
+    function subscribeMuxEnded(iframe) {
+      if (!iframe || !iframe.contentWindow) return;
+      const payload = {
+        context: "player.js",
+        version: "0.0.11",
+        method: "addEventListener",
+        value: "ended"
+      };
+      iframe.contentWindow.postMessage(JSON.stringify(payload), "https://player.mux.com");
+      iframe.contentWindow.postMessage(payload, "https://player.mux.com");
+    }
+
     function showVideo() {
       const url = atob(VIDEO_URL_B64);
       wrap.innerHTML = "";
@@ -280,27 +293,69 @@
       if (/\.(mp4|webm|ogg)(\?.*)?$/i.test(url)) {
         el = document.createElement("video");
         el.controls = true;
+        el.controlsList = "nodownload";
+        el.disablePictureInPicture = true;
         el.src = url;
+        el.addEventListener("ended", hideVideo);
+        wrap.appendChild(el);
       } else {
         el = document.createElement("iframe");
         el.src = url;
-        el.allow = "accelerometer; autoplay; encrypted-media; fullscreen; picture-in-picture";
+        el.allow = "accelerometer; gyroscope; autoplay; encrypted-media; picture-in-picture; fullscreen; clipboard-write 'none'";
         el.allowFullscreen = true;
+        el.sandbox = "allow-scripts allow-same-origin allow-presentation";
+        el.referrerPolicy = "no-referrer";
         el.title = "Video";
+        el.addEventListener("load", () => subscribeMuxEnded(el));
+        wrap.appendChild(el);
+
+        const shield = document.createElement("div");
+        shield.className = "mux-badge-shield";
+        wrap.appendChild(shield);
       }
-      wrap.appendChild(el);
 
       loginBox.hidden = true;
       playerBox.hidden = false;
     }
 
     function hideVideo() {
+      if (document.fullscreenElement) {
+        document.exitFullscreen().catch(() => {});
+      }
       wrap.innerHTML = "";          // removes the link from the page again
       playerBox.hidden = true;
       loginBox.hidden = false;
       document.getElementById("login-form").reset();
       document.getElementById("username").focus();
     }
+
+    window.addEventListener("message", (e) => {
+      if (e.origin !== "https://player.mux.com") return;
+      let msg = e.data;
+      if (typeof msg === "string") {
+        try { msg = JSON.parse(msg); } catch (err) { return; }
+      }
+      if (!msg || typeof msg !== "object") return;
+
+      if (msg.event === "ready") {
+        subscribeMuxEnded(wrap.querySelector("iframe"));
+      } else if (msg.event === "ended" || msg.type === "ended") {
+        hideVideo();
+      }
+    });
+
+    // Require re-login on browser back/forward navigation
+    window.addEventListener("pageshow", (e) => {
+      if (e.persisted) hideVideo();
+    });
+
+    // Disable right-click and common save/source shortcuts on the page
+    document.addEventListener("contextmenu", (e) => e.preventDefault());
+    document.addEventListener("keydown", (e) => {
+      if ((e.ctrlKey || e.metaKey) && ["s", "u"].includes(e.key.toLowerCase())) {
+        e.preventDefault();
+      }
+    });
 
     document.getElementById("login-form").addEventListener("submit", (e) => {
       e.preventDefault();
