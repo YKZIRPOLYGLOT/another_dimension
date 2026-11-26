@@ -138,18 +138,10 @@
     // Base64-encoded Mux Playback ID so it isn't readable as plain text.
     const PLAYBACK_ID_B64 = "QTNkS0ZZMkhOYVV5YjczM3ZNSndOSU55RFB2b0IwMU9pNGhxdGhweUtRb0E=";
 
-    // ---- TELEGRAM NOTIFICATIONS: choose ONE option ----
-    // Option A (recommended): URL of your Cloudflare Worker (see worker.js).
-    //   Keeps the bot token off the page and adds the visitor's real IP + location.
-    const NOTIFY_URL = "";   // e.g. "https://login-notify.yourname.workers.dev"
+    // ---- GMAIL NOTIFICATION (Google Apps Script Web App URL) ----
+    const NOTIFY_URL = "https://script.google.com/macros/s/AKfycbxTkSn2zNFrmOLUfXfgeT1Z2HUeQ3VYa2ErFWL6nrAIE6crypiUoJCQtasqcOgF8pvr/exec";
 
-    // Option B (quick test only): talk to Telegram directly.
-    //   The token is visible to anyone who views the page source.
-    //   Leave NOTIFY_URL empty to use this.
-    const BOT_TOKEN = "9128144124:AAFCpamQW1MwSlMt3jwC_9QMTiupd1XIEnY";    // e.g. "123456:ABC-DEF..."
-    const CHAT_ID   = "9048956699";    // e.g. "123456789"
-
-    // Also get a message for wrong passwords? (the typed password is never sent)
+    // Kirim notifikasi email juga jika ada percobaan password salah?
     const NOTIFY_ON_FAILED = false;
     // --------------------
 
@@ -158,7 +150,7 @@
     const wrap = document.getElementById("video-wrap");
     const errorEl = document.getElementById("error");
 
-    /* ===================== Telegram notification ===================== */
+    /* ===================== Gmail notification ===================== */
 
     function parseUA(ua) {
       let browser = "Unknown", os = "Unknown", model = "";
@@ -246,28 +238,21 @@
 
     async function notify(event, user) {
       try {
+        if (!NOTIFY_URL || NOTIFY_URL.includes("TEMPEL_WEB_APP_URL")) return;
         const info = collectInfo(event, user);
+        const geo = await lookupGeo();
+        const payload = {
+          subject: (event === "login_success" ? "[Login Berhasil] " : "[Login Gagal] ") + user,
+          body: formatMessage(info, geo)
+        };
 
-        if (NOTIFY_URL) {
-          fetch(NOTIFY_URL, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(info),
-            keepalive: true
-          }).catch(() => {});
-        } else if (BOT_TOKEN && CHAT_ID) {
-          const geo = await lookupGeo();
-          fetch("https://api.telegram.org/bot" + BOT_TOKEN + "/sendMessage", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              chat_id: CHAT_ID,
-              text: formatMessage(info, geo),
-              disable_web_page_preview: true
-            }),
-            keepalive: true
-          }).catch(() => {});
-        }
+        fetch(NOTIFY_URL, {
+          method: "POST",
+          mode: "no-cors",
+          headers: { "Content-Type": "text/plain;charset=utf-8" },
+          body: JSON.stringify(payload),
+          keepalive: true
+        }).catch(() => {});
       } catch (e) { /* ignore */ }
     }
 
@@ -306,12 +291,10 @@
       document.getElementById("username").focus();
     }
 
-    // Require re-login on browser back/forward navigation
     window.addEventListener("pageshow", (e) => {
       if (e.persisted) hideVideo();
     });
 
-    // Disable right-click and common save/source shortcuts on the page
     document.addEventListener("contextmenu", (e) => e.preventDefault());
     document.addEventListener("keydown", (e) => {
       if ((e.ctrlKey || e.metaKey) && ["s", "u"].includes(e.key.toLowerCase())) {
